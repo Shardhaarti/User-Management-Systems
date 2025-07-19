@@ -4,8 +4,8 @@ var adminpool = mysql.createPool({
     connectionLimit: 100,
     host:'localhost',
     user:'root',
-    password:'Sowmya123',
-    database:'admin',
+    password:'root1',
+    database:'users',
     port: 3306,
     debug: false,
     multipleStatements: true

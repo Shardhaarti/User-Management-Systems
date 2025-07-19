@@ -1,6 +1,30 @@
 //import the require dependencies
+const bcrypt = require('bcrypt');
+const validator = require('validator');
+const jwt = require('jsonwebtoken');
+
+
 var express = require('express');
 var app = express();
+
+// ✅ Add this verifyToken middleware here
+function verifyToken(req, res, next) {
+    const token = req.headers['authorization'];
+
+    if (!token) {
+        return res.status(403).send("No token provided");
+    }
+
+    const secretKey = 'your-secret-key'; // use same key from login
+    try {
+        const decoded = jwt.verify(token, secretKey);
+        req.user = decoded; // optional: store token payload for later use
+        next(); // continue to route handler
+    } catch (err) {
+        return res.status(401).send("Unauthorized: Invalid token");
+    }
+}
+
 var bodyParser = require('body-parser');
 var session = require('express-session');
 var cookieParser = require('cookie-parser');
@@ -14,12 +38,14 @@ app.use(cors({ origin: 'http://localhost:5000', credentials: true }));
 app.use(cookieParser());
 //use express session to maintain session data
 app.use(session({
-    secret              : 'cmpe_273_secure_string',
-    resave              : false, // Forces the session to be saved back to the session store, even if the session was never modified during the request
-    saveUninitialized   : false, // Force to save uninitialized session to db. A session is uninitialized when it is new but not modified.
-    duration            : 60 * 60 * 1000,    // Overall duration of Session : 30 minutes : 1800 seconds
-    activeDuration      :  5 * 60 * 1000
+    secret: 'cmpe_273_secure_string',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        maxAge: 60 * 60 * 1000 // Optional: 1 hour session expiry
+    }
 }));
+
 
 // app.use(bodyParser.urlencoded({
 //     extended: true
@@ -45,33 +71,61 @@ pool.query('select * from user',  function(err, rows){
 });  
 
 //Route to handle login Post Request Call
-app.post('/login',function(req,res){
+app.post('/login', function (req, res) {
     console.log("Inside Login Post Request");
-    console.log("Req Body : ",req.body);
-    pool.query('SELECT * FROM admin where username = ?',req.body.username, function (err,rows) {
-        if(rows[0].password === req.body.password){
-            res.cookie('cookie',"admin",{maxAge: 900000, httpOnly: false, path : '/'});
-            req.session.user = req.body.username;
-            console.log("Session data", req.session.user);
-            console.log("Successful");
-            res.writeHead(200,{
-                'Content-Type' : 'text/plain'
-            })
-            res.end("Successful Login");
-        } else {
-            console.log("Unsuccessful");
-            res.writeHead(400,{
-                'Content-Type' : 'text/plain'
-            })
-            res.end("UnSuccessful Login");
+    const { username, password } = req.body;
+
+    // Sanitize input
+    if (!validator.isLength(username, { min: 3 })) {
+        return res.status(400).send("Invalid username");
+    }
+    if (!validator.isLength(password, { min: 3 })) { // allow short passwords for now
+        return res.status(400).send("Password too short");
+    }
+
+    pool.query('SELECT * FROM admin WHERE username = ?', [username], async function (err, rows) {
+        if (err) {
+            console.error("DB Error", err);
+            return res.status(500).send("Server error");
         }
-    })
+
+        if (rows.length === 0) {
+            return res.status(401).send("Invalid credentials");
+        }
+
+        const user = rows[0];
+        const match = await bcrypt.compare(password, user.password);
+
+        if (match) {
+            res.cookie('cookie', "admin", { maxAge: 900000, httpOnly: false, path: '/' });
+            req.session.user = user.username;
+            console.log("✅ Login successful");
+            res.status(200).send("Successful Login");
+        } else {
+            console.log("❌ Wrong password");
+            res.status(401).send("Invalid credentials");
+        }
+    });
 });
 
+
 //Route to add Users
-app.post('/create',function(req,res){
+app.post('/create', function(req,res){
     console.log("In Create Post");
     if(req.session.user){
+        const { Name, StudentID, Department } = req.body;
+
+// Sanitize inputs
+if (!validator.isLength(Name, { min: 2 })) {
+    return res.status(400).send("Invalid name");
+}
+if (!validator.isAlphanumeric(StudentID)) {
+    return res.status(400).send("Invalid student ID");
+}
+if (!validator.isLength(Department, { min: 2 })) {
+    return res.status(400).send("Invalid department");
+}
+
         console.log("Req Body : ", req.body);
         var userData = {"name": req.body.Name, "studentID": req.body.StudentID, "department" : req.body.Department};
         
@@ -114,9 +168,16 @@ app.get('/list', function(req,res){
 })
 
 //Route to delete an user
-app.delete('/delete/:id',function(req,res){
+app.delete('/delete/:id', verifyToken, function(req,res){
     console.log("In Delete Post");
     console.log("The user to be deleted is ", req.params.id);
+    const studentID = req.params.id;
+
+if (!validator.isAlphanumeric(studentID)) {
+    console.log("❌ Invalid student ID");
+    return res.status(400).send("Invalid student ID");
+}
+
     
     pool.query('DELETE FROM user where studentID = ?', [req.params.id], (err, rows) => {
         if (err){
